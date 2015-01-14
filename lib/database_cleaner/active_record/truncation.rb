@@ -142,6 +142,20 @@ module DatabaseCleaner
         @restart_identity ||= db_version >=  80400 ? 'RESTART IDENTITY' : ''
       end
 
+      def database_cleaner_view_cache
+        @views ||=
+            begin
+              rows = select_rows <<-"_SQL"
+                SELECT table_schema || '.' || table_name
+                FROM information_schema.views
+                WHERE table_catalog = '#{current_database}'
+              _SQL
+              rows.collect { |result| result.first }
+            rescue
+              []
+            end
+      end
+
       def truncate_table(table_name)
         truncate_tables([table_name])
       end
@@ -163,6 +177,32 @@ module DatabaseCleaner
         # within the search path, truncation without the schema name could
         # result in confusing, if not unexpected results.
         @database_cleaner_tables ||= tables_with_schema
+      end
+
+      #
+      # The primary difference in this version versus the AR 4 version is that it
+      # uses only the schema-qualified table names, rather that a list that is the
+      # union of all tables and views in both bare and schema-qualified forms,
+      # which is...interesting.
+      #
+      def disable_referential_integrity #:nodoc:
+        tables = tables_with_schema
+        if supports_disable_referential_integrity?
+          begin
+            execute(tables.collect { |name| "ALTER TABLE #{quote_table_name(name)} DISABLE TRIGGER ALL" }.join(";"))
+          rescue
+            execute(tables.collect { |name| "ALTER TABLE #{quote_table_name(name)} DISABLE TRIGGER USER" }.join(";"))
+          end
+        end
+        yield
+      ensure
+        if supports_disable_referential_integrity?
+          begin
+            execute(tables.collect { |name| "ALTER TABLE #{quote_table_name(name)} ENABLE TRIGGER ALL" }.join(";"))
+          rescue
+            execute(tables.collect { |name| "ALTER TABLE #{quote_table_name(name)} ENABLE TRIGGER USER" }.join(";"))
+          end
+        end
       end
 
       private
